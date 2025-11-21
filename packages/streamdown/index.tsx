@@ -5,11 +5,11 @@ import {
   createContext,
   memo,
   useEffect,
-  useId,
   useMemo,
   useState,
-  useTransition,
 } from "react";
+import { useId } from "./hooks/useId";
+import { useTransition } from "./hooks/useTransition";
 import { harden } from "rehype-harden";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
