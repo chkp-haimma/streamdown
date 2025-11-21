@@ -1,11 +1,11 @@
 import {
   type HTMLAttributes,
-  startTransition,
   useContext,
   useEffect,
   useRef,
   useState,
 } from "react";
+import { useTransition } from "../../hooks/useTransition";
 import type { BundledLanguage } from "shiki";
 import { useThrottledDebounce } from "../../hooks/use-throttled-debouce";
 import { StreamdownContext } from "../../index";
@@ -46,6 +46,7 @@ export const CodeBlock = ({
   const [html, setHtml] = useState<string>("");
   const [lastHighlightedCode, setLastHighlightedCode] = useState("");
   const [incompleteLine, setIncompleteLine] = useState("");
+  const [_isPending, startTransition] = useTransition();
   const codeToHighlight = useThrottledDebounce(code);
   const timeoutRef = useRef(0);
   const mounted = useRef(false);
