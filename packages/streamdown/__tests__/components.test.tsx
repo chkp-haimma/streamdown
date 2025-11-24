@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import React from "react";
 import { describe, expect, it } from "vitest";
 import { components as importedComponents } from "../lib/components";
@@ -23,9 +23,9 @@ describe("Markdown Components", () => {
       );
       const ol = container.querySelector("ol");
       expect(ol).toBeTruthy();
-      expect(ol?.className).toContain("ml-4");
+      expect(ol?.className).toContain("list-inside");
       expect(ol?.className).toContain("list-decimal");
-      expect(ol?.className).toContain("list-outside");
+      expect(ol?.className).toContain("whitespace-normal");
     });
 
     it("should render unordered list with correct classes", () => {
@@ -41,9 +41,9 @@ describe("Markdown Components", () => {
       );
       const ul = container.querySelector("ul");
       expect(ul).toBeTruthy();
-      expect(ul?.className).toContain("ml-4");
+      expect(ul?.className).toContain("list-inside");
       expect(ul?.className).toContain("list-disc");
-      expect(ul?.className).toContain("list-outside");
+      expect(ul?.className).toContain("whitespace-normal");
     });
 
     it("should render list item with correct classes", () => {
@@ -230,7 +230,7 @@ describe("Markdown Components", () => {
       expect(code?.className).toContain("text-sm");
     });
 
-    it("should render block code without inline styles", () => {
+    it("should render block code without inline styles", async () => {
       const Code = components.code;
       if (!Code) {
         throw new Error("Code component not found");
@@ -250,11 +250,18 @@ describe("Markdown Components", () => {
         </Code>
       );
 
+      // Wait for lazy-loaded CodeBlock component
+      await waitFor(() => {
+        const codeBlock = container.querySelector(
+          '[data-streamdown="code-block"]'
+        );
+        expect(codeBlock).toBeTruthy();
+      });
+
       // Block code renders a CodeBlock component with copy button
       const codeBlock = container.querySelector(
         '[data-streamdown="code-block"]'
       );
-      expect(codeBlock).toBeTruthy();
       expect(codeBlock?.getAttribute("data-language")).toBe("");
 
       // Should contain copy button
@@ -276,7 +283,7 @@ describe("Markdown Components", () => {
       expect(code?.textContent).toBe("const x = 1;");
     });
 
-    it("should extract language from code className", () => {
+    it("should extract language from code className", async () => {
       const Code = components.code;
       if (!Code) {
         throw new Error("Code component not found");
@@ -297,11 +304,19 @@ describe("Markdown Components", () => {
           const x = 1;
         </Code>
       );
+
+      // Wait for lazy-loaded CodeBlock component
+      await waitFor(() => {
+        const codeBlock = container.querySelector(
+          '[data-streamdown="code-block"]'
+        );
+        expect(codeBlock).toBeTruthy();
+      });
+
       // Code component with multi-line position renders a CodeBlock with language
       const codeBlock = container.querySelector(
         '[data-streamdown="code-block"]'
       );
-      expect(codeBlock).toBeTruthy();
       expect(codeBlock?.getAttribute("data-language")).toBe("javascript");
     });
 

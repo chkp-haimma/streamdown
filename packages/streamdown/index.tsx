@@ -27,7 +27,6 @@ import { cn } from "./lib/utils";
 
 export type { MermaidConfig } from "mermaid";
 // biome-ignore lint/performance/noBarrelFile: "required"
-export { defaultUrlTransform } from "./lib/markdown";
 export { parseMarkdownIntoBlocks } from "./lib/parse-blocks";
 export { parseIncompleteMarkdown } from "./lib/parse-incomplete-markdown";
 
@@ -176,11 +175,6 @@ export const Block = memo(
       return false;
     }
 
-    // Check if urlTransform changed (reference comparison)
-    if (prevProps.urlTransform !== nextProps.urlTransform) {
-      return false;
-    }
-
     return true;
   }
 );
@@ -191,19 +185,6 @@ const defaultShikiTheme: [BundledTheme, BundledTheme] = [
   "github-light",
   "github-dark",
 ];
-
-// Simple hash function for stable keys
-const hashString = (str: string): string => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    // biome-ignore lint/suspicious/noBitwiseOperators: "Required"
-    hash = (hash << 5) - hash + char;
-    // biome-ignore lint/suspicious/noBitwiseOperators: "Required"
-    hash &= hash; // Convert to 32bit integer
-  }
-  return Math.abs(hash).toString(36);
-};
 
 export const Streamdown = memo(
   ({
@@ -218,7 +199,6 @@ export const Streamdown = memo(
     mermaid,
     controls = true,
     isAnimating = false,
-    urlTransform = (value) => value,
     BlockComponent = Block,
     parseMarkdownIntoBlocksFn = parseMarkdownIntoBlocks,
     ...props
@@ -248,14 +228,13 @@ export const Streamdown = memo(
     // Use displayBlocks for rendering to leverage useTransition
     const blocksToRender = mode === "streaming" ? displayBlocks : blocks;
 
-    // Generate stable keys based on content hash + index
-    // This prevents re-renders when content doesn't change but still handles position changes
+    // Generate stable keys based on index only
+    // Don't use content hash - that causes unmount/remount when content changes
+    // React will handle content updates via props changes and memo comparison
+    // biome-ignore lint/correctness/useExhaustiveDependencies: "we're using the blocksToRender length"
     const blockKeys = useMemo(
-      () =>
-        blocksToRender.map(
-          (block, idx) => `${generatedId}-${hashString(block)}-${idx}`
-        ),
-      [blocksToRender, generatedId]
+      () => blocksToRender.map((_block, idx) => `${generatedId}-${idx}`),
+      [blocksToRender.length, generatedId]
     );
 
     // Combined context value - single object reduces React tree overhead
@@ -279,19 +258,48 @@ export const Streamdown = memo(
       [components]
     );
 
+    // Only load KaTeX CSS when math syntax is detected in content
     useEffect(() => {
-      if (
+      // Check if katex plugin is included
+      const hasKatexPlugin =
         Array.isArray(rehypePlugins) &&
         rehypePlugins.some((plugin) =>
           Array.isArray(plugin)
             ? plugin[0] === rehypeKatex
             : plugin === rehypeKatex
-        )
-      ) {
-        // @ts-expect-error
+        );
+
+      if (!hasKatexPlugin) {
+        return;
+      }
+
+      // Check if single dollar math is enabled in remarkMath config
+      let singleDollarEnabled = false;
+      if (Array.isArray(remarkPlugins)) {
+        const mathPlugin = remarkPlugins.find((plugin) =>
+          Array.isArray(plugin) ? plugin[0] === remarkMath : plugin === remarkMath
+        );
+        if (mathPlugin && Array.isArray(mathPlugin) && mathPlugin[1]) {
+          const config = mathPlugin[1] as { singleDollarTextMath?: boolean };
+          singleDollarEnabled = config.singleDollarTextMath === true;
+        }
+      }
+
+      // Only load CSS if content contains math syntax
+      const content = typeof children === "string" ? children : "";
+      const hasDoubleDollar = content.includes("$$");
+      const hasSingleDollar = singleDollarEnabled && (
+        /[^$]\$[^$]/.test(content) ||
+        /^\$[^$]/.test(content) ||
+        /[^$]\$$/.test(content)
+      );
+      const hasMathSyntax = hasDoubleDollar || hasSingleDollar;
+
+      if (hasMathSyntax) {
+        // @ts-expect-error - dynamic import for CSS
         import("katex/dist/katex.min.css");
       }
-    }, [rehypePlugins]);
+    }, [rehypePlugins, remarkPlugins, children]);
 
     // Static mode: simple rendering without streaming features
     if (mode === "static") {
@@ -302,7 +310,6 @@ export const Streamdown = memo(
               components={mergedComponents}
               rehypePlugins={rehypePlugins}
               remarkPlugins={remarkPlugins}
-              urlTransform={urlTransform}
               {...props}
             >
               {children}
@@ -325,7 +332,6 @@ export const Streamdown = memo(
               rehypePlugins={rehypePlugins}
               remarkPlugins={remarkPlugins}
               shouldParseIncompleteMarkdown={shouldParseIncompleteMarkdown}
-              urlTransform={urlTransform}
               {...props}
             />
           ))}

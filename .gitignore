@@ -45,4 +45,4 @@ package-lock.json
 .source
 
 # Benchmarks
-benchmark-results.txt
+results.txt

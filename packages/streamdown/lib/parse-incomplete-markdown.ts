@@ -11,6 +11,26 @@ const letterNumberUnderscorePattern = /[\p{L}\p{N}_]/u;
 const inlineTripleBacktickPattern = /^```[^`\n]*```?$/;
 const fourOrMoreAsterisksPattern = /^\*{4,}$/;
 
+// OPTIMIZATION: Precompute which characters are word characters
+// Using ASCII fast path before falling back to Unicode regex
+const isWordChar = (char: string): boolean => {
+  if (!char) {
+    return false;
+  }
+  const code = char.charCodeAt(0);
+  // ASCII optimization: a-z, A-Z, 0-9, _
+  if (
+    (code >= 48 && code <= 57) || // 0-9
+    (code >= 65 && code <= 90) || // A-Z
+    (code >= 97 && code <= 122) || // a-z
+    code === 95 // _
+  ) {
+    return true;
+  }
+  // Fallback to regex for Unicode characters (less common)
+  return letterNumberUnderscorePattern.test(char);
+};
+
 // Helper function to check if we have a complete code block
 const hasCompleteCodeBlock = (text: string): boolean => {
   const tripleBackticks = (text.match(/```/g) || []).length;
@@ -19,106 +39,89 @@ const hasCompleteCodeBlock = (text: string): boolean => {
   );
 };
 
-// Cache for code block state to avoid recalculating
-let codeBlockCache: boolean[] | null = null;
-let codeBlockCacheText = "";
+const linkImagePattern = /(!?\[)([^\]]*?)$/;
+const incompleteLinkUrlPattern = /(!?)\[([^\]]+)\]\(([^)]+)$/;
 
-// Build code block state map for entire text (called once per text)
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: "State machine logic for tracking code block boundaries"
-const buildCodeBlockState = (text: string): boolean[] => {
-  const len = text.length;
-  const state = new Array(len).fill(false);
-  let insideMultilineBlock = false;
-  let insideInlineBlock = false;
+// Helper function to find the matching opening bracket for a closing bracket
+// Handles nested brackets correctly by searching backwards
+const findMatchingOpeningBracket = (text: string, closeIndex: number): number => {
+  let depth = 1;
+  for (let i = closeIndex - 1; i >= 0; i -= 1) {
+    if (text[i] === "]") {
+      depth += 1;
+    } else if (text[i] === "[") {
+      depth -= 1;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+  return -1; // No matching bracket found
+};
 
-  for (let i = 0; i < len; i++) {
-    const char = text[i];
-    const next1 = i + 1 < len ? text[i + 1] : "";
-    const next2 = i + 2 < len ? text[i + 2] : "";
-    const prev1 = i > 0 ? text[i - 1] : "";
-    const prev2 = i > 1 ? text[i - 2] : "";
+// Helper function to find the matching closing bracket for an opening bracket
+// Handles nested brackets correctly
+const findMatchingClosingBracket = (text: string, openIndex: number): number => {
+  let depth = 1;
+  for (let i = openIndex + 1; i < text.length; i += 1) {
+    if (text[i] === "[") {
+      depth += 1;
+    } else if (text[i] === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+  return -1; // No matching bracket found
+};
 
-    // Check for triple backticks
-    if (char === "`" && next1 === "`" && next2 === "`") {
-      insideMultilineBlock = !insideMultilineBlock;
-      state[i] = state[i + 1] = state[i + 2] = insideMultilineBlock;
-      i += 2;
+// Check if a position is inside a code block (between ``` or `)
+const isInsideCodeBlock = (text: string, position: number): boolean => {
+  // Check for inline code (backticks)
+  let inInlineCode = false;
+  let inMultilineCode = false;
+
+  for (let i = 0; i < position; i += 1) {
+    // Check for triple backticks (multiline code blocks)
+    if (text.substring(i, i + 3) === "```") {
+      inMultilineCode = !inMultilineCode;
+      i += 2; // Skip the next 2 backticks
       continue;
     }
 
-    // Check for single backticks (not part of triple)
-    if (char === "`") {
-      const isPartOfTriple =
-        (next1 === "`" && next2 === "`") ||
-        (prev1 === "`" && next1 === "`") ||
-        (prev2 === "`" && prev1 === "`");
-
-      if (!(isPartOfTriple || insideMultilineBlock)) {
-        insideInlineBlock = !insideInlineBlock;
-      }
+    // Only check for inline code if not in multiline code
+    if (!inMultilineCode && text[i] === "`") {
+      inInlineCode = !inInlineCode;
     }
-
-    state[i] = insideMultilineBlock || insideInlineBlock;
   }
 
-  return state;
-};
-
-// Helper function to check if a position is inside a code block (either inline or multiline)
-const isInsideCodeBlock = (text: string, position: number): boolean => {
-  // Use cache if text hasn't changed
-  if (codeBlockCacheText !== text) {
-    codeBlockCacheText = text;
-    codeBlockCache = buildCodeBlockState(text);
-  }
-
-  return codeBlockCache && position < codeBlockCache.length
-    ? codeBlockCache[position]
-    : false;
+  return inInlineCode || inMultilineCode;
 };
 
 // Handles incomplete links and images by preserving them with a special marker
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: "Complex link/image parsing logic with multiple edge cases"
 const handleIncompleteLinksAndImages = (text: string): string => {
-  // First check for incomplete URLs: [text](partial-url or ![text](partial-url without closing )
-  // Use string methods instead of regex to avoid ReDoS vulnerability
+  // Look for patterns like [text]( or ![text]( at the end of text
+  // We need to handle nested brackets in the link text
 
-  // Look for ]( pattern, which indicates start of a link/image URL
-  const lastUrlStart = text.lastIndexOf("](");
+  // Start from the end and look for ]( pattern
+  const lastParenIndex = text.lastIndexOf("](");
+  if (lastParenIndex !== -1 && !isInsideCodeBlock(text, lastParenIndex)) {
+    // Check if this ]( is not followed by a closing )
+    const afterParen = text.substring(lastParenIndex + 2);
+    if (!afterParen.includes(")")) {
+      // We have an incomplete URL like [text](partial-url
+      // Now find the matching opening bracket for the ] before (
+      const openBracketIndex = findMatchingOpeningBracket(text, lastParenIndex);
 
-  if (lastUrlStart !== -1) {
-    // Check if there's a closing ) after ](
-    const closingParen = text.indexOf(")", lastUrlStart + 2);
+      if (openBracketIndex !== -1 && !isInsideCodeBlock(text, openBracketIndex)) {
+        // Check if there's a ! before the [
+        const isImage = openBracketIndex > 0 && text[openBracketIndex - 1] === "!";
+        const startIndex = isImage ? openBracketIndex - 1 : openBracketIndex;
 
-    if (closingParen === -1) {
-      // No closing ), so this might be an incomplete URL
-      // Find the opening [ for this link
-      let openBracket = -1;
-      let bracketDepth = 0;
-
-      for (let i = lastUrlStart - 1; i >= 0; i--) {
-        if (text[i] === "]") {
-          bracketDepth += 1;
-        } else if (text[i] === "[") {
-          if (bracketDepth === 0) {
-            openBracket = i;
-            break;
-          }
-          bracketDepth -= 1;
-        }
-      }
-
-      if (openBracket !== -1) {
-        const isImage = openBracket > 0 && text[openBracket - 1] === "!";
-        const matchStart = isImage ? openBracket - 1 : openBracket;
-        const linkText = text.substring(openBracket + 1, lastUrlStart);
-
-        // Check if this match is inside a code block
-        if (isInsideCodeBlock(text, matchStart)) {
-          return text;
-        }
-
-        const beforeLink = text.substring(0, matchStart);
+        // Extract everything before this link/image
+        const beforeLink = text.substring(0, startIndex);
+        const linkText = text.substring(openBracketIndex + 1, lastParenIndex);
 
         if (isImage) {
           // For images with incomplete URLs, remove them entirely
@@ -132,46 +135,42 @@ const handleIncompleteLinksAndImages = (text: string): string => {
   }
 
   // Then check for incomplete link text: [partial-text without closing ]
-  // Use string methods instead of regex to avoid ReDoS vulnerability
+  // Search backwards for an opening bracket that doesn't have a matching closing bracket
+  for (let i = text.length - 1; i >= 0; i -= 1) {
+    if (text[i] === "[" && !isInsideCodeBlock(text, i)) {
+      // Check if there's a ! before it
+      const isImage = i > 0 && text[i - 1] === "!";
+      const openIndex = isImage ? i - 1 : i;
 
-  // Search backwards to find the last [ or ![
-  let matchStart = -1;
-  let isImage = false;
+      // Check if we have a closing bracket after this
+      const afterOpen = text.substring(i + 1);
+      if (!afterOpen.includes("]")) {
+        // This is an incomplete link/image
+        const beforeLink = text.substring(0, openIndex);
 
-  for (let i = text.length - 1; i >= 0; i--) {
-    if (text[i] === "[") {
-      // Check if this is part of ![
-      if (i > 0 && text[i - 1] === "!") {
-        matchStart = i - 1;
-        isImage = true;
-      } else {
-        matchStart = i;
-        isImage = false;
-      }
-      break;
-    }
-  }
+        if (isImage) {
+          // For images, we remove them as they can't show skeleton
+          return beforeLink;
+        }
 
-  if (matchStart !== -1) {
-    // Check if there's a closing ] after this bracket
-    const searchStart = isImage ? matchStart + 2 : matchStart + 1;
-    const closingBracket = text.indexOf("]", searchStart);
-    const hasClosingBracket = closingBracket !== -1;
-
-    if (!hasClosingBracket) {
-      // Check if this match is inside a code block
-      if (isInsideCodeBlock(text, matchStart)) {
-        return text;
+        // For links, preserve the text and close the link with a
+        // special placeholder URL that indicates it's incomplete
+        return `${text}](streamdown:incomplete-link)`;
       }
 
-      // For images, we still remove them as they can't show skeleton
-      if (isImage) {
-        return text.substring(0, matchStart);
-      }
+      // If we found a closing bracket, we need to check if it's the matching one
+      // (accounting for nested brackets)
+      const closingIndex = findMatchingClosingBracket(text, i);
+      if (closingIndex === -1) {
+        // No matching closing bracket
+        const beforeLink = text.substring(0, openIndex);
 
-      // For links, preserve the text and close the link with a
-      // special placeholder URL that indicates it's incomplete
-      return `${text}](streamdown:incomplete-link)`;
+        if (isImage) {
+          return beforeLink;
+        }
+
+        return `${text}](streamdown:incomplete-link)`;
+      }
     }
   }
 
@@ -179,6 +178,7 @@ const handleIncompleteLinksAndImages = (text: string): string => {
 };
 
 // Completes incomplete bold formatting (**)
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: "Complex markdown parsing logic with multiple edge cases"
 const handleIncompleteBold = (text: string): string => {
   // Don't process if inside a complete code block
   if (hasCompleteCodeBlock(text)) {
@@ -229,6 +229,7 @@ const handleIncompleteBold = (text: string): string => {
 };
 
 // Completes incomplete italic formatting with double underscores (__)
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: "Complex markdown parsing logic with multiple edge cases"
 const handleIncompleteDoubleUnderscoreItalic = (text: string): string => {
   const italicMatch = text.match(italicPattern);
 
@@ -273,54 +274,63 @@ const handleIncompleteDoubleUnderscoreItalic = (text: string): string => {
   return text;
 };
 
+// OPTIMIZATION: Counts single asterisks without split("").reduce()
 // Counts single asterisks that are not part of double asterisks, not escaped, not list markers, and not word-internal
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: "Complex character counting logic with multiple edge cases"
 const countSingleAsterisks = (text: string): number => {
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: "Complex character counting logic with multiple edge cases"
-  return text.split("").reduce((acc, char, index) => {
-    if (char === "*") {
-      const prevChar = text[index - 1];
-      const nextChar = text[index + 1];
-      // Skip if escaped with backslash
-      if (prevChar === "\\") {
-        return acc;
-      }
-      // Skip if asterisk is word-internal (between word characters)
-      if (
-        prevChar &&
-        nextChar &&
-        letterNumberUnderscorePattern.test(prevChar) &&
-        letterNumberUnderscorePattern.test(nextChar)
-      ) {
-        return acc;
-      }
-      // Check if this is a list marker (asterisk at start of line followed by space)
-      // Look backwards to find the start of the current line
-      let lineStartIndex = index;
-      for (let i = index - 1; i >= 0; i--) {
-        if (text[i] === "\n") {
-          lineStartIndex = i + 1;
-          break;
-        }
-        if (i === 0) {
-          lineStartIndex = 0;
-          break;
-        }
-      }
-      // Check if this asterisk is at the beginning of a line (with optional whitespace)
-      const beforeAsterisk = text.substring(lineStartIndex, index);
-      if (
-        beforeAsterisk.trim() === "" &&
-        (nextChar === " " || nextChar === "\t")
-      ) {
-        // This is likely a list marker, don't count it
-        return acc;
-      }
-      if (prevChar !== "*" && nextChar !== "*") {
-        return acc + 1;
+  let count = 0;
+  const len = text.length;
+
+  for (let index = 0; index < len; index += 1) {
+    if (text[index] !== "*") {
+      continue;
+    }
+
+    const prevChar = index > 0 ? text[index - 1] : "";
+    const nextChar = index < len - 1 ? text[index + 1] : "";
+
+    // Skip if escaped with backslash
+    if (prevChar === "\\") {
+      continue;
+    }
+
+    // Skip if part of ** or ***
+    if (prevChar === "*" || nextChar === "*") {
+      continue;
+    }
+
+    // Skip if asterisk is word-internal (between word characters)
+    if (prevChar && nextChar && isWordChar(prevChar) && isWordChar(nextChar)) {
+      continue;
+    }
+
+    // Check if this is a list marker (asterisk at start of line followed by space)
+    // Look backwards to find the start of the current line
+    let lineStartIndex = 0;
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (text[i] === "\n") {
+        lineStartIndex = i + 1;
+        break;
       }
     }
-    return acc;
-  }, 0);
+
+    // Check if this asterisk is at the beginning of a line (with optional whitespace)
+    let isListMarker = true;
+    for (let i = lineStartIndex; i < index; i += 1) {
+      if (text[i] !== " " && text[i] !== "\t") {
+        isListMarker = false;
+        break;
+      }
+    }
+
+    if (isListMarker && (nextChar === " " || nextChar === "\t")) {
+      continue;
+    }
+
+    count += 1;
+  }
+
+  return count;
 };
 
 // Completes incomplete italic formatting with single asterisks (*)
@@ -336,7 +346,7 @@ const handleIncompleteSingleAsteriskItalic = (text: string): string => {
   if (singleAsteriskMatch) {
     // Find the first single asterisk position (not part of ** and not word-internal)
     let firstSingleAsteriskIndex = -1;
-    for (let i = 0; i < text.length; i++) {
+    for (let i = 0; i < text.length; i += 1) {
       if (
         text[i] === "*" &&
         text[i - 1] !== "*" &&
@@ -349,8 +359,8 @@ const handleIncompleteSingleAsteriskItalic = (text: string): string => {
         if (
           prevChar &&
           nextChar &&
-          letterNumberUnderscorePattern.test(prevChar) &&
-          letterNumberUnderscorePattern.test(nextChar)
+          isWordChar(prevChar) &&
+          isWordChar(nextChar)
         ) {
           continue;
         }
@@ -416,36 +426,48 @@ const isWithinMathBlock = (text: string, position: number): boolean => {
   return inInlineMath || inBlockMath;
 };
 
+// OPTIMIZATION: Counts single underscores without split("").reduce()
 // Counts single underscores that are not part of double underscores, not escaped, and not in math blocks
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: "Complex character counting logic with multiple edge cases"
 const countSingleUnderscores = (text: string): number => {
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: "Complex character counting logic with multiple edge cases"
-  return text.split("").reduce((acc, char, index) => {
-    if (char === "_") {
-      const prevChar = text[index - 1];
-      const nextChar = text[index + 1];
-      // Skip if escaped with backslash
-      if (prevChar === "\\") {
-        return acc;
-      }
-      // Skip if within math block
-      if (isWithinMathBlock(text, index)) {
-        return acc;
-      }
-      // Skip if underscore is word-internal (between word characters)
-      if (
-        prevChar &&
-        nextChar &&
-        letterNumberUnderscorePattern.test(prevChar) &&
-        letterNumberUnderscorePattern.test(nextChar)
-      ) {
-        return acc;
-      }
-      if (prevChar !== "_" && nextChar !== "_") {
-        return acc + 1;
-      }
+  // OPTIMIZATION: For large texts, if there are no dollar signs, skip math block checking entirely
+  const hasMathBlocks = text.includes("$");
+
+  let count = 0;
+  const len = text.length;
+
+  for (let index = 0; index < len; index += 1) {
+    if (text[index] !== "_") {
+      continue;
     }
-    return acc;
-  }, 0);
+
+    const prevChar = index > 0 ? text[index - 1] : "";
+    const nextChar = index < len - 1 ? text[index + 1] : "";
+
+    // Skip if escaped with backslash
+    if (prevChar === "\\") {
+      continue;
+    }
+
+    // Skip if within math block (only check if text has dollar signs)
+    if (hasMathBlocks && isWithinMathBlock(text, index)) {
+      continue;
+    }
+
+    // Skip if part of __
+    if (prevChar === "_" || nextChar === "_") {
+      continue;
+    }
+
+    // Skip if underscore is word-internal (between word characters)
+    if (prevChar && nextChar && isWordChar(prevChar) && isWordChar(nextChar)) {
+      continue;
+    }
+
+    count += 1;
+  }
+
+  return count;
 };
 
 // Completes incomplete italic formatting with single underscores (_)
@@ -461,7 +483,7 @@ const handleIncompleteSingleUnderscoreItalic = (text: string): string => {
   if (singleUnderscoreMatch) {
     // Find the first single underscore position (not part of __ and not word-internal)
     let firstSingleUnderscoreIndex = -1;
-    for (let i = 0; i < text.length; i++) {
+    for (let i = 0; i < text.length; i += 1) {
       if (
         text[i] === "_" &&
         text[i - 1] !== "_" &&
@@ -475,8 +497,8 @@ const handleIncompleteSingleUnderscoreItalic = (text: string): string => {
         if (
           prevChar &&
           nextChar &&
-          letterNumberUnderscorePattern.test(prevChar) &&
-          letterNumberUnderscorePattern.test(nextChar)
+          isWordChar(prevChar) &&
+          isWordChar(nextChar)
         ) {
           continue;
         }
@@ -609,6 +631,7 @@ const handleIncompleteInlineCode = (text: string): string => {
 };
 
 // Completes incomplete strikethrough formatting (~~)
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: "Complex markdown parsing logic with multiple edge cases"
 const handleIncompleteStrikethrough = (text: string): string => {
   const strikethroughMatch = text.match(strikethroughPattern);
 
@@ -631,24 +654,6 @@ const handleIncompleteStrikethrough = (text: string): string => {
   }
 
   return text;
-};
-
-// Counts single dollar signs that are not part of double dollar signs and not escaped
-const _countSingleDollarSigns = (text: string): number => {
-  return text.split("").reduce((acc, char, index) => {
-    if (char === "$") {
-      const prevChar = text[index - 1];
-      const nextChar = text[index + 1];
-      // Skip if escaped with backslash
-      if (prevChar === "\\") {
-        return acc;
-      }
-      if (prevChar !== "$" && nextChar !== "$") {
-        return acc + 1;
-      }
-    }
-    return acc;
-  }, 0);
 };
 
 // Completes incomplete block KaTeX formatting ($$)
@@ -677,17 +682,27 @@ const handleIncompleteBlockKatex = (text: string): string => {
 };
 
 // Counts triple asterisks that are not part of quadruple or more asterisks
+// OPTIMIZATION: Count *** without regex to avoid allocation
 const countTripleAsterisks = (text: string): number => {
   let count = 0;
-  const matches = text.match(/\*+/g) || [];
+  let consecutiveAsterisks = 0;
 
-  for (const match of matches) {
-    // Count how many complete triple asterisks are in this sequence
-    const asteriskCount = match.length;
-    if (asteriskCount >= 3) {
-      // Each group of exactly 3 asterisks counts as one triple asterisk marker
-      count += Math.floor(asteriskCount / 3);
+  // biome-ignore lint/style/useForOf: "Need index access to check character codes for performance"
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === "*") {
+      consecutiveAsterisks += 1;
+    } else {
+      // End of asterisk sequence
+      if (consecutiveAsterisks >= 3) {
+        count += Math.floor(consecutiveAsterisks / 3);
+      }
+      consecutiveAsterisks = 0;
     }
+  }
+
+  // Handle trailing asterisks
+  if (consecutiveAsterisks >= 3) {
+    count += Math.floor(consecutiveAsterisks / 3);
   }
 
   return count;

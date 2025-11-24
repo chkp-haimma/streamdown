@@ -4,22 +4,30 @@ import {
   type ImgHTMLAttributes,
   isValidElement,
   type JSX,
+  lazy,
   memo,
+  Suspense,
   useContext,
 } from "react";
 import type { BundledLanguage } from "shiki";
 import { StreamdownContext } from "../index";
-import { CodeBlock } from "./code-block";
 import { CodeBlockCopyButton } from "./code-block/copy-button";
 import { CodeBlockDownloadButton } from "./code-block/download-button";
-import { CodeBlock as StaticCodeBlock } from "./code-block/static";
+import { CodeBlockSkeleton } from "./code-block/skeleton";
 import { ImageComponent } from "./image";
 import type { ExtraProps, Options } from "./markdown";
-import { Mermaid } from "./mermaid";
 import { MermaidDownloadDropdown } from "./mermaid/download-button";
 import { MermaidFullscreenButton } from "./mermaid/fullscreen-button";
 import { Table } from "./table";
 import { cn } from "./utils";
+
+// Lazy load heavy components
+const CodeBlock = lazy(() =>
+  import("./code-block").then((mod) => ({ default: mod.CodeBlock }))
+);
+const Mermaid = lazy(() =>
+  import("./mermaid").then((mod) => ({ default: mod.Mermaid }))
+);
 
 const LANGUAGE_REGEX = /language-([^\s]+)/;
 
@@ -119,10 +127,7 @@ type OlProps = WithNode<JSX.IntrinsicElements["ol"]>;
 const MemoOl = memo<OlProps>(
   ({ children, className, node, ...props }: OlProps) => (
     <ol
-      className={cn(
-        "ml-4 list-outside list-decimal whitespace-normal",
-        className
-      )}
+      className={cn("list-inside list-decimal whitespace-normal", className)}
       data-streamdown="ordered-list"
       {...props}
     >
@@ -153,7 +158,7 @@ type UlProps = WithNode<JSX.IntrinsicElements["ul"]>;
 const MemoUl = memo<UlProps>(
   ({ children, className, node, ...props }: UlProps) => (
     <ul
-      className={cn("ml-4 list-outside list-disc whitespace-normal", className)}
+      className={cn("list-inside list-disc whitespace-normal", className)}
       data-streamdown="unordered-list"
       {...props}
     >
@@ -596,13 +601,8 @@ const CodeComponent = ({
 }: DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement> &
   ExtraProps) => {
   const inline = node?.position?.start.line === node?.position?.end.line;
-  const {
-    mermaid: mermaidContext,
-    controls: controlsConfig,
-    mode,
-  } = useContext(StreamdownContext);
-
-  const CodeBlockComponent = mode === "static" ? StaticCodeBlock : CodeBlock;
+  const { mermaid: mermaidContext, controls: controlsConfig } =
+    useContext(StreamdownContext);
 
   if (inline) {
     return (
@@ -646,54 +646,55 @@ const CodeComponent = ({
     );
 
     return (
-      <div
-        className={cn(
-          "group relative my-4 h-auto rounded-xl border p-4",
-          className
-        )}
-        data-streamdown="mermaid-block"
-      >
-        {showMermaidControls &&
-          (showDownload || showCopy || showFullscreen) && (
-            <div className="flex items-center justify-end gap-2">
-              {showDownload && (
-                <MermaidDownloadDropdown
-                  chart={code}
-                  config={mermaidContext?.config}
-                />
-              )}
-              {showCopy && <CodeBlockCopyButton code={code} />}
-              {showFullscreen && (
-                <MermaidFullscreenButton
-                  chart={code}
-                  config={mermaidContext?.config}
-                />
-              )}
-            </div>
+      <Suspense fallback={<CodeBlockSkeleton />}>
+        <div
+          className={cn(
+            "group relative my-4 h-auto rounded-xl border p-4",
+            className
           )}
-        <Mermaid chart={code} config={mermaidContext?.config} />
-      </div>
+          data-streamdown="mermaid-block"
+        >
+          {showMermaidControls &&
+            (showDownload || showCopy || showFullscreen) && (
+              <div className="flex items-center justify-end gap-2">
+                {showDownload && (
+                  <MermaidDownloadDropdown
+                    chart={code}
+                    config={mermaidContext?.config}
+                  />
+                )}
+                {showCopy && <CodeBlockCopyButton code={code} />}
+                {showFullscreen && (
+                  <MermaidFullscreenButton
+                    chart={code}
+                    config={mermaidContext?.config}
+                  />
+                )}
+              </div>
+            )}
+          <Mermaid chart={code} config={mermaidContext?.config} />
+        </div>
+      </Suspense>
     );
   }
 
   const showCodeControls = shouldShowControls(controlsConfig, "code");
 
   return (
-    <CodeBlockComponent
-      className={cn("overflow-x-auto border-border border-t", className)}
-      code={code}
-      data-language={language}
-      data-streamdown="code-block"
-      language={language}
-      preClassName="overflow-x-auto font-mono text-xs p-4 bg-muted/40"
-    >
-      {showCodeControls && (
-        <>
-          <CodeBlockDownloadButton code={code} language={language} />
-          <CodeBlockCopyButton />
-        </>
-      )}
-    </CodeBlockComponent>
+    <Suspense fallback={<CodeBlockSkeleton />}>
+      <CodeBlock
+        className={cn("overflow-x-auto border-border border-t", className)}
+        code={code}
+        language={language}
+      >
+        {showCodeControls && (
+          <>
+            <CodeBlockDownloadButton code={code} language={language} />
+            <CodeBlockCopyButton />
+          </>
+        )}
+      </CodeBlock>
+    </Suspense>
   );
 };
 

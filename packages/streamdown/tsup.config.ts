@@ -8,4 +8,7 @@ export default defineConfig({
   outDir: "dist",
   sourcemap: false,
   external: ["react", "react-dom"],
+  treeshake: true,
+  splitting: true,
+  platform: "browser",
 });
