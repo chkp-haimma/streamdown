@@ -2,8 +2,8 @@
   "name": "streamdown-monorepo",
   "private": true,
   "scripts": {
-    "build": "turbo run build",
-    "dev": "turbo run dev",
+    "build": "node api.js && turbo run build",
+    "dev": "node api.js && turbo run dev",
     "check": "npx ultracite@latest check",
     "fix": "npx ultracite@latest fix",
     "test": "turbo run test",
