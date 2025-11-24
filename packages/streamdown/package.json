@@ -1,5 +1,5 @@
 {
-  "name": "streamdown",
+  "name": "@chkp-haimma/streamdown",
   "version": "1.6.6",
   "type": "module",
   "main": "./dist/index.js",
@@ -19,8 +19,12 @@
   "homepage": "https://streamdown.ai",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/vercel/streamdown.git",
+    "url": "git+https://github.com/chkp-haimma/streamdown.git",
     "directory": "packages/streamdown"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
     "build": "tsup",
