@@ -20,10 +20,7 @@ type Options = {
     rehypePlugins?: PluggableList;
     remarkPlugins?: PluggableList;
     remarkRehypeOptions?: Readonly<Options$1>;
-    urlTransform?: UrlTransform;
 };
-type UrlTransform = (url: string, key: string, node: Readonly<Element>) => string | null | undefined;
-declare const defaultUrlTransform: (value: string) => string;
 
 declare const parseMarkdownIntoBlocks: (markdown: string) => string[];
 
@@ -74,6 +71,6 @@ type BlockProps = Options & {
     index: number;
 };
 declare const Block: react.MemoExoticComponent<({ content, shouldParseIncompleteMarkdown, ...props }: BlockProps) => react_jsx_runtime.JSX.Element>;
-declare const Streamdown: react.MemoExoticComponent<({ children, mode, parseIncompleteMarkdown: shouldParseIncompleteMarkdown, components, rehypePlugins, remarkPlugins, className, shikiTheme, mermaid, controls, isAnimating, urlTransform, BlockComponent, parseMarkdownIntoBlocksFn, ...props }: StreamdownProps) => react_jsx_runtime.JSX.Element>;
+declare const Streamdown: react.MemoExoticComponent<({ children, mode, parseIncompleteMarkdown: shouldParseIncompleteMarkdown, components, rehypePlugins, remarkPlugins, className, shikiTheme, mermaid, controls, isAnimating, BlockComponent, parseMarkdownIntoBlocksFn, ...props }: StreamdownProps) => react_jsx_runtime.JSX.Element>;
 
-export { Block, type ControlsConfig, type MermaidErrorComponentProps, type MermaidOptions, Streamdown, StreamdownContext, type StreamdownContextType, type StreamdownProps, defaultRehypePlugins, defaultRemarkPlugins, defaultUrlTransform, parseIncompleteMarkdown, parseMarkdownIntoBlocks };
+export { Block, type ControlsConfig, type MermaidErrorComponentProps, type MermaidOptions, Streamdown, StreamdownContext, type StreamdownContextType, type StreamdownProps, defaultRehypePlugins, defaultRemarkPlugins, parseIncompleteMarkdown, parseMarkdownIntoBlocks };
