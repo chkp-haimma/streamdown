@@ -23,6 +23,20 @@
     "typescript": "5.9.3",
     "ultracite": "6.3.4"
   },
+  "overrides": {
+    "micromark-util-symbol": "^2.0.0",
+    "entities": "^6.0.0"
+  },
+  "resolutions": {
+    "micromark-util-symbol": "^2.0.0",
+    "entities": "^6.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "micromark-util-symbol": "^2.0.0",
+      "entities": "^6.0.0"
+    }
+  },
   "packageManager": "pnpm@10.22.0",
   "engines": {
     "node": ">=18"
